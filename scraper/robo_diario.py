@@ -27,6 +27,7 @@ from supabase import Client, create_client
 from unidecode import unidecode
 
 DOWNLOAD_URL = "https://diariooficial.santos.sp.gov.br/edicoes/inicio/download/{data}"
+SITE_URL = "https://alexandreva-spec.github.io/alerta-diario-santos/"
 
 
 def normaliza(texto: str) -> str:
@@ -128,6 +129,12 @@ def envia_email(destinatarios: list[str], nome: str, termo_valor: str, pagina: i
     <b>{data_edicao}</b>, na página {pagina}.</p>
     <p><i>Trecho encontrado:</i><br>&laquo;...{trecho}...&raquo;</p>
     <p>O PDF completo da edição está anexado a este e-mail.</p>
+    <hr>
+    <p style="font-size:12px;color:#666;">
+    Não quer mais receber estes alertas? Acesse <a href="{SITE_URL}">{SITE_URL}</a>,
+    entre com seu e-mail e clique em "Pausar todos os alertas" (ou exclua o alerta
+    específico em "Meus alertas").
+    </p>
     """
     resend.Emails.send(
         {
