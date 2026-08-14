@@ -1,0 +1,32 @@
+name: Alerta Diário Oficial de Santos
+
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      data:
+        description: "Data da edição a checar (AAAA-MM-DD). Vazio = hoje."
+        required: false
+
+jobs:
+  checar-diario:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instala dependências
+        run: pip install -r scraper/requirements.txt
+
+      - name: Roda o robô
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_REMETENTE: ${{ secrets.EMAIL_REMETENTE }}
+        run: |
+          python scraper/robo_diario.py --data "${{ github.event.inputs.data }}"
