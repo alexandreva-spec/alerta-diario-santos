@@ -70,6 +70,8 @@
   .msg.ok { color: var(--accent); }
   .msg.error { color: var(--danger); }
   .hidden { display: none !important; }
+  .button-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .button-row button { margin-top: 0; }
   footer { text-align: center; color: var(--ink-muted); font-size: 0.8rem; margin-top: 24px; }
 </style>
 </head>
@@ -102,6 +104,7 @@
   <!-- Termos de busca -->
   <section id="terms-card" class="card hidden">
     <strong>Meus alertas</strong>
+    <div id="pausado-banner" class="msg error hidden">Seus alertas estão pausados — você não vai receber notificações até reativar.</div>
     <div id="terms-list"></div>
 
     <label>Novo alerta</label>
@@ -113,7 +116,11 @@
     <button id="btn-add-termo">Adicionar alerta</button>
     <div id="terms-msg" class="msg"></div>
 
-    <button class="secondary" id="btn-logout" style="margin-top:24px;">Sair</button>
+    <div class="button-row">
+      <button class="secondary" id="btn-toggle-todos">Pausar todos os alertas</button>
+      <button class="secondary" id="btn-logout">Sair</button>
+      <button class="danger" id="btn-excluir-conta">Excluir meus dados</button>
+    </div>
   </section>
 
   <footer>Fonte: diariooficial.santos.sp.gov.br — este serviço não tem qualquer vínculo com a Prefeitura de Santos.</footer>
@@ -208,6 +215,44 @@
     await loadTerms();
   }
 
+  function renderTermoView(row, t) {
+    row.innerHTML = `
+      <div>
+        <div>${t.valor}</div>
+        <div class="term-tag">${t.tipo === "nome_completo" ? "Nome completo" : "Palavra-chave"} · ${t.ativo ? "ativo" : "pausado"}</div>
+      </div>
+      <div>
+        <button class="secondary" data-action="edit">Editar</button>
+        <button class="secondary" data-action="toggle">${t.ativo ? "Pausar" : "Reativar"}</button>
+        <button class="danger" data-action="remove">Excluir</button>
+      </div>
+    `;
+    row.querySelector('[data-action="edit"]').addEventListener("click", () => renderTermoEdit(row, t));
+    row.querySelector('[data-action="toggle"]').addEventListener("click", () => toggleTermo(t.id, !t.ativo));
+    row.querySelector('[data-action="remove"]').addEventListener("click", () => removeTermo(t.id));
+  }
+
+  function renderTermoEdit(row, t) {
+    row.innerHTML = `
+      <div style="flex:1; display:flex; gap:8px; align-items:center;">
+        <input type="text" value="${t.valor.replace(/"/g, "&quot;")}" style="margin:0;" />
+      </div>
+      <div>
+        <button class="secondary" data-action="salvar">Salvar</button>
+        <button class="secondary" data-action="cancelar">Cancelar</button>
+      </div>
+    `;
+    const input = row.querySelector("input");
+    input.focus();
+    row.querySelector('[data-action="salvar"]').addEventListener("click", async () => {
+      const novoValor = input.value.trim();
+      if (!novoValor) return;
+      await sb.from("search_terms").update({ valor: novoValor }).eq("id", t.id);
+      await loadTerms();
+    });
+    row.querySelector('[data-action="cancelar"]').addEventListener("click", () => renderTermoView(row, t));
+  }
+
   async function loadTerms() {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return;
@@ -229,26 +274,46 @@
     for (const t of data) {
       const row = document.createElement("div");
       row.className = "term-item";
-      row.innerHTML = `
-        <div>
-          <div>${t.valor}</div>
-          <div class="term-tag">${t.tipo === "nome_completo" ? "Nome completo" : "Palavra-chave"} · ${t.ativo ? "ativo" : "pausado"}</div>
-        </div>
-        <div>
-          <button class="secondary" data-action="toggle" data-id="${t.id}" data-ativo="${t.ativo}">${t.ativo ? "Pausar" : "Reativar"}</button>
-          <button class="danger" data-action="remove" data-id="${t.id}">Excluir</button>
-        </div>
-      `;
+      renderTermoView(row, t);
       list.appendChild(row);
     }
-    list.querySelectorAll("button[data-action]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const id = btn.dataset.id;
-        if (btn.dataset.action === "remove") removeTermo(id);
-        else toggleTermo(id, btn.dataset.ativo !== "true");
-      });
-    });
   }
+
+  let contaAtiva = true;
+
+  function atualizaEstadoConta() {
+    $("btn-toggle-todos").textContent = contaAtiva ? "Pausar todos os alertas" : "Reativar todos os alertas";
+    $("pausado-banner").classList.toggle("hidden", contaAtiva);
+  }
+
+  $("btn-toggle-todos").addEventListener("click", async () => {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const novoValor = !contaAtiva;
+    const { error } = await sb.from("users").update({ ativo: novoValor }).eq("id", user.id);
+    if (error) {
+      setMsg($("terms-msg"), error.message, false);
+      return;
+    }
+    contaAtiva = novoValor;
+    atualizaEstadoConta();
+  });
+
+  $("btn-excluir-conta").addEventListener("click", async () => {
+    const ok = confirm(
+      "Isso apaga seu nome, telefone e todos os alertas cadastrados, sem volta. Confirma?"
+    );
+    if (!ok) return;
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const { error } = await sb.from("users").delete().eq("id", user.id);
+    if (error) {
+      setMsg($("terms-msg"), error.message, false);
+      return;
+    }
+    await sb.auth.signOut();
+    window.location.reload();
+  });
 
   async function refreshUI() {
     const { data: { session } } = await sb.auth.getSession();
@@ -262,7 +327,7 @@
 
     const { data: profile } = await sb
       .from("users")
-      .select("nome")
+      .select("nome, ativo")
       .eq("id", session.user.id)
       .maybeSingle();
 
@@ -274,6 +339,8 @@
     $("profile-nome").value = profile.nome || "";
     $("profile-card").classList.remove("hidden");
     $("terms-card").classList.remove("hidden");
+    contaAtiva = profile.ativo !== false;
+    atualizaEstadoConta();
     await loadTerms();
   }
 
