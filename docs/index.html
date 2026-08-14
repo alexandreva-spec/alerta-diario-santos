@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Alerta Diário Oficial de Santos</title>
+<style>
+  :root {
+    --bg: #f6f5f2;
+    --card: #ffffff;
+    --ink: #1f2420;
+    --ink-muted: #5c645d;
+    --accent: #2f6b4f;
+    --accent-ink: #ffffff;
+    --border: #e1ddd3;
+    --danger: #a4453a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  main { width: 100%; max-width: 560px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  p.lead { color: var(--ink-muted); margin-top: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 0.85rem; margin: 12px 0 4px; color: var(--ink-muted); }
+  input[type=text], input[type=email], input[type=tel], select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 1rem;
+    background: #fff;
+    color: var(--ink);
+  }
+  button {
+    margin-top: 16px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--ink-muted); border: 1px solid var(--border); }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .radio-row { display: flex; gap: 16px; margin-top: 8px; font-size: 0.9rem; }
+  .radio-row label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); }
+  .term-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .term-item:last-child { border-bottom: none; }
+  .term-tag { font-size: 0.75rem; color: var(--ink-muted); }
+  .msg { font-size: 0.9rem; margin-top: 12px; }
+  .msg.ok { color: var(--accent); }
+  .msg.error { color: var(--danger); }
+  .hidden { display: none !important; }
+  footer { text-align: center; color: var(--ink-muted); font-size: 0.8rem; margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Alerta Diário Oficial de Santos</h1>
+  <p class="lead">Cadastre um nome completo e/ou palavra-chave e receba um e-mail sempre que ele aparecer na edição do dia.</p>
+
+  <!-- Login -->
+  <section id="login-card" class="card">
+    <strong>Entrar</strong>
+    <p style="color:var(--ink-muted); font-size:0.9rem;">Digite seu e-mail. Enviaremos um link de acesso — não precisa de senha.</p>
+    <label for="login-email">E-mail</label>
+    <input type="email" id="login-email" placeholder="voce@exemplo.com" />
+    <button id="btn-login">Enviar link de acesso</button>
+    <div id="login-msg" class="msg"></div>
+  </section>
+
+  <!-- Perfil (após login, antes de ter nome cadastrado) -->
+  <section id="profile-card" class="card hidden">
+    <strong>Seus dados</strong>
+    <label for="profile-nome">Nome</label>
+    <input type="text" id="profile-nome" placeholder="Seu nome completo" />
+    <label for="profile-telefone">Telefone (opcional, para uso futuro em SMS/WhatsApp)</label>
+    <input type="tel" id="profile-telefone" placeholder="(13) 90000-0000" />
+    <button id="btn-save-profile">Salvar</button>
+    <div id="profile-msg" class="msg"></div>
+  </section>
+
+  <!-- Termos de busca -->
+  <section id="terms-card" class="card hidden">
+    <strong>Meus alertas</strong>
+    <div id="terms-list"></div>
+
+    <label>Novo alerta</label>
+    <div class="radio-row">
+      <label><input type="radio" name="tipo" value="nome_completo" checked /> Nome completo</label>
+      <label><input type="radio" name="tipo" value="palavra_chave" /> Palavra-chave</label>
+    </div>
+    <input type="text" id="novo-termo" placeholder="Ex.: Maria da Silva Souza" style="margin-top:8px;" />
+    <button id="btn-add-termo">Adicionar alerta</button>
+    <div id="terms-msg" class="msg"></div>
+
+    <button class="secondary" id="btn-logout" style="margin-top:24px;">Sair</button>
+  </section>
+
+  <footer>Fonte: diariooficial.santos.sp.gov.br — este serviço não tem qualquer vínculo com a Prefeitura de Santos.</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+  // Preencha com os dados do seu projeto Supabase (Project Settings > API).
+  const SUPABASE_URL = "https://hezznuvggceizddjaifs.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_a3oRmhxUS96MI7zvplijpA_sgP2GmBE";
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const $ = (id) => document.getElementById(id);
+
+  function setMsg(el, text, ok) {
+    el.textContent = text;
+    el.className = "msg " + (ok ? "ok" : "error");
+  }
+
+  $("btn-login").addEventListener("click", async () => {
+    const email = $("login-email").value.trim();
+    if (!email) return;
+    $("btn-login").disabled = true;
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.href },
+    });
+    $("btn-login").disabled = false;
+    setMsg($("login-msg"), error ? error.message : "Link enviado! Confira seu e-mail.", !error);
+  });
+
+  $("btn-logout").addEventListener("click", async () => {
+    await sb.auth.signOut();
+    window.location.reload();
+  });
+
+  $("btn-save-profile").addEventListener("click", async () => {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const nome = $("profile-nome").value.trim();
+    const telefone = $("profile-telefone").value.trim();
+    if (!nome) {
+      setMsg($("profile-msg"), "Informe seu nome.", false);
+      return;
+    }
+    const { error } = await sb.from("users").upsert({
+      id: user.id,
+      email: user.email,
+      nome,
+      telefone: telefone || null,
+    });
+    if (error) {
+      setMsg($("profile-msg"), error.message, false);
+      return;
+    }
+    setMsg($("profile-msg"), "Salvo!", true);
+    await loadTerms();
+    $("terms-card").classList.remove("hidden");
+  });
+
+  $("btn-add-termo").addEventListener("click", async () => {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const valor = $("novo-termo").value.trim();
+    const tipo = document.querySelector('input[name="tipo"]:checked').value;
+    if (!valor) {
+      setMsg($("terms-msg"), "Digite um nome ou palavra-chave.", false);
+      return;
+    }
+    const { error } = await sb.from("search_terms").insert({
+      user_id: user.id,
+      tipo,
+      valor,
+    });
+    if (error) {
+      setMsg($("terms-msg"), error.message, false);
+      return;
+    }
+    $("novo-termo").value = "";
+    setMsg($("terms-msg"), "Alerta adicionado.", true);
+    await loadTerms();
+  });
+
+  async function removeTermo(id) {
+    await sb.from("search_terms").delete().eq("id", id);
+    await loadTerms();
+  }
+
+  async function toggleTermo(id, ativo) {
+    await sb.from("search_terms").update({ ativo }).eq("id", id);
+    await loadTerms();
+  }
+
+  async function loadTerms() {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const { data, error } = await sb
+      .from("search_terms")
+      .select("id, tipo, valor, ativo")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true });
+    const list = $("terms-list");
+    list.innerHTML = "";
+    if (error) {
+      setMsg($("terms-msg"), error.message, false);
+      return;
+    }
+    if (!data || data.length === 0) {
+      list.innerHTML = '<p style="color:var(--ink-muted); font-size:0.9rem;">Nenhum alerta cadastrado ainda.</p>';
+      return;
+    }
+    for (const t of data) {
+      const row = document.createElement("div");
+      row.className = "term-item";
+      row.innerHTML = `
+        <div>
+          <div>${t.valor}</div>
+          <div class="term-tag">${t.tipo === "nome_completo" ? "Nome completo" : "Palavra-chave"} · ${t.ativo ? "ativo" : "pausado"}</div>
+        </div>
+        <div>
+          <button class="secondary" data-action="toggle" data-id="${t.id}" data-ativo="${t.ativo}">${t.ativo ? "Pausar" : "Reativar"}</button>
+          <button class="danger" data-action="remove" data-id="${t.id}">Excluir</button>
+        </div>
+      `;
+      list.appendChild(row);
+    }
+    list.querySelectorAll("button[data-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        if (btn.dataset.action === "remove") removeTermo(id);
+        else toggleTermo(id, btn.dataset.ativo !== "true");
+      });
+    });
+  }
+
+  async function refreshUI() {
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      $("login-card").classList.remove("hidden");
+      $("profile-card").classList.add("hidden");
+      $("terms-card").classList.add("hidden");
+      return;
+    }
+    $("login-card").classList.add("hidden");
+
+    const { data: profile } = await sb
+      .from("users")
+      .select("nome")
+      .eq("id", session.user.id)
+      .maybeSingle();
+
+    if (!profile) {
+      $("profile-card").classList.remove("hidden");
+      $("terms-card").classList.add("hidden");
+      return;
+    }
+    $("profile-nome").value = profile.nome || "";
+    $("profile-card").classList.remove("hidden");
+    $("terms-card").classList.remove("hidden");
+    await loadTerms();
+  }
+
+  sb.auth.onAuthStateChange(() => refreshUI());
+  refreshUI();
+</script>
+</body>
+</html>
