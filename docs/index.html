@@ -78,7 +78,7 @@
 <body>
 <main>
   <h1>Alerta Diário Oficial de Santos</h1>
-  <p class="lead">Cadastre um nome completo e/ou palavra-chave e receba um e-mail sempre que ele aparecer na edição do dia.</p>
+  <p class="lead">Cadastre seu nome completo (um por e-mail) e receba um alerta sempre que ele aparecer na edição do dia.</p>
 
   <!-- Login -->
   <section id="login-card" class="card">
@@ -107,13 +107,11 @@
     <div id="pausado-banner" class="msg error hidden">Seus alertas estão pausados — você não vai receber notificações até reativar.</div>
     <div id="terms-list"></div>
 
-    <label>Novo alerta</label>
-    <div class="radio-row">
-      <label><input type="radio" name="tipo" value="nome_completo" checked /> Nome completo</label>
-      <label><input type="radio" name="tipo" value="palavra_chave" /> Palavra-chave</label>
+    <div id="novo-alerta-form">
+      <label for="novo-termo">Seu nome completo</label>
+      <input type="text" id="novo-termo" placeholder="Ex.: Maria da Silva Souza" />
+      <button id="btn-add-termo">Adicionar alerta</button>
     </div>
-    <input type="text" id="novo-termo" placeholder="Ex.: Maria da Silva Souza" style="margin-top:8px;" />
-    <button id="btn-add-termo">Adicionar alerta</button>
     <div id="terms-msg" class="msg"></div>
 
     <div class="button-row">
@@ -141,6 +139,34 @@
     el.className = "msg " + (ok ? "ok" : "error");
   }
 
+  const TRADUCOES_ERRO = [
+    [/email rate limit exceeded/i, "Muitos pedidos de link seguidos. Espere alguns minutos e tente de novo."],
+    [/email link is invalid or has expired/i, "Esse link expirou ou já foi usado. Peça um novo abaixo."],
+    [/invalid login credentials/i, "E-mail inválido. Confira e tente de novo."],
+    [/user not found/i, "E-mail não encontrado."],
+    [/token has expired or is invalid/i, "Esse link expirou ou já foi usado. Peça um novo abaixo."],
+    [/unable to validate email address/i, "Digite um e-mail válido."],
+    [/signups not allowed/i, "Cadastro de novos e-mails está temporariamente desativado."],
+  ];
+
+  function traduzErro(msg) {
+    if (!msg) return "Algo deu errado. Tente de novo em instantes.";
+    for (const [padrao, traducao] of TRADUCOES_ERRO) {
+      if (padrao.test(msg)) return traducao;
+    }
+    return msg;
+  }
+
+  function mostraErroDaUrl() {
+    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+    const params = new URLSearchParams(hash);
+    const descricao = params.get("error_description");
+    if (descricao) {
+      setMsg($("login-msg"), traduzErro(descricao.replace(/\+/g, " ")), false);
+      history.replaceState(null, "", window.location.pathname);
+    }
+  }
+
   $("btn-login").addEventListener("click", async () => {
     const email = $("login-email").value.trim();
     if (!email) return;
@@ -150,7 +176,7 @@
       options: { emailRedirectTo: window.location.href },
     });
     $("btn-login").disabled = false;
-    setMsg($("login-msg"), error ? error.message : "Link enviado! Confira seu e-mail.", !error);
+    setMsg($("login-msg"), error ? traduzErro(error.message) : "Link enviado! Confira seu e-mail.", !error);
   });
 
   $("btn-logout").addEventListener("click", async () => {
@@ -174,7 +200,7 @@
       telefone: telefone || null,
     });
     if (error) {
-      setMsg($("profile-msg"), error.message, false);
+      setMsg($("profile-msg"), traduzErro(error.message), false);
       return;
     }
     setMsg($("profile-msg"), "Salvo!", true);
@@ -186,18 +212,29 @@
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return;
     const valor = $("novo-termo").value.trim();
-    const tipo = document.querySelector('input[name="tipo"]:checked').value;
     if (!valor) {
-      setMsg($("terms-msg"), "Digite um nome ou palavra-chave.", false);
+      setMsg($("terms-msg"), "Digite seu nome completo.", false);
+      return;
+    }
+    if (valor.split(/\s+/).length < 2) {
+      setMsg($("terms-msg"), "Digite o nome completo (nome e sobrenome), não apenas uma palavra.", false);
+      return;
+    }
+    const { count } = await sb
+      .from("search_terms")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id);
+    if (count > 0) {
+      setMsg($("terms-msg"), "Você já tem um nome cadastrado. Exclua-o antes de adicionar outro.", false);
       return;
     }
     const { error } = await sb.from("search_terms").insert({
       user_id: user.id,
-      tipo,
+      tipo: "nome_completo",
       valor,
     });
     if (error) {
-      setMsg($("terms-msg"), error.message, false);
+      setMsg($("terms-msg"), traduzErro(error.message), false);
       return;
     }
     $("novo-termo").value = "";
@@ -264,11 +301,12 @@
     const list = $("terms-list");
     list.innerHTML = "";
     if (error) {
-      setMsg($("terms-msg"), error.message, false);
+      setMsg($("terms-msg"), traduzErro(error.message), false);
       return;
     }
     if (!data || data.length === 0) {
       list.innerHTML = '<p style="color:var(--ink-muted); font-size:0.9rem;">Nenhum alerta cadastrado ainda.</p>';
+      $("novo-alerta-form").classList.remove("hidden");
       return;
     }
     for (const t of data) {
@@ -277,6 +315,7 @@
       renderTermoView(row, t);
       list.appendChild(row);
     }
+    $("novo-alerta-form").classList.add("hidden");
   }
 
   let contaAtiva = true;
@@ -292,7 +331,7 @@
     const novoValor = !contaAtiva;
     const { error } = await sb.from("users").update({ ativo: novoValor }).eq("id", user.id);
     if (error) {
-      setMsg($("terms-msg"), error.message, false);
+      setMsg($("terms-msg"), traduzErro(error.message), false);
       return;
     }
     contaAtiva = novoValor;
@@ -308,7 +347,7 @@
     if (!user) return;
     const { error } = await sb.from("users").delete().eq("id", user.id);
     if (error) {
-      setMsg($("terms-msg"), error.message, false);
+      setMsg($("terms-msg"), traduzErro(error.message), false);
       return;
     }
     await sb.auth.signOut();
@@ -344,6 +383,7 @@
     await loadTerms();
   }
 
+  mostraErroDaUrl();
   sb.auth.onAuthStateChange(() => refreshUI());
   refreshUI();
 </script>
