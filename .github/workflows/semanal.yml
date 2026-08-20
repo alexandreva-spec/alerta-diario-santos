@@ -1,0 +1,29 @@
+name: Relatório Semanal - Alerta Diário Oficial de Santos
+
+on:
+  schedule:
+    # Segunda-feira, 14:00 UTC = 11:00 em Santos (horário de Brasília).
+    - cron: "0 14 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  relatorio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instala dependências
+        run: pip install -r scraper/requirements.txt
+
+      - name: Gera e envia o relatório
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_REMETENTE: ${{ secrets.EMAIL_REMETENTE }}
+        run: |
+          python scraper/relatorio_semanal.py
