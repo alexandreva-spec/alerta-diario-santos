@@ -2,7 +2,10 @@ name: Alerta Diário Oficial de Santos
 
 on:
   schedule:
-    - cron: "30 12 * * 1-5"
+    # A cada 30 min, das 00h00 às 10h30 em Santos (UTC-3 = 03h-13h30 UTC).
+    # O robô mesmo evita reprocessar: assim que acha a edição do dia, as
+    # checagens seguintes encerram na hora sem bater no site de novo.
+    - cron: "*/30 3-13 * * 1-5"
   workflow_dispatch:
     inputs:
       data:
