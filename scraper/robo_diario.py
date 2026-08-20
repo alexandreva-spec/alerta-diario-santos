@@ -29,10 +29,46 @@ from unidecode import unidecode
 DOWNLOAD_URL = "https://diariooficial.santos.sp.gov.br/edicoes/inicio/download/{data}"
 SITE_URL = "https://alexandreva-spec.github.io/alerta-diario-santos/"
 
+# Palavras-chave (mais específicas primeiro) usadas para adivinhar o assunto
+# do trecho encontrado, sem precisar de IA — só um rótulo aproximado.
+CONTEXTO_PALAVRAS = [
+    ("rescisao de contrato", "Rescisão de contrato"),
+    ("processo administrativo", "Processo administrativo"),
+    ("exoneracao", "Exoneração de cargo"),
+    ("nomeacao", "Nomeação para cargo"),
+    ("designacao", "Designação"),
+    ("aposentadoria", "Aposentadoria"),
+    ("readaptacao", "Readaptação"),
+    ("progressao funcional", "Progressão funcional"),
+    ("licenca", "Licença"),
+    ("ferias", "Férias"),
+    ("concurso publico", "Concurso público"),
+    ("licitacao", "Licitação"),
+    ("edital", "Edital"),
+    ("portaria", "Portaria"),
+    ("decreto", "Decreto"),
+    ("contrato", "Contrato / convênio"),
+    ("processo", "Processo administrativo"),
+]
+
 
 def normaliza(texto: str) -> str:
     """minúsculas + sem acento, para comparação robusta."""
     return unidecode(texto or "").lower()
+
+
+def limpa_texto(texto: str) -> str:
+    """Troca caracteres não decodificáveis (comuns em PDFs de diário oficial,
+    geralmente marcadores/separadores) por um separador legível."""
+    return re.sub(r"�+", " · ", texto)
+
+
+def detecta_contexto(trecho_normalizado: str) -> str | None:
+    """Tenta adivinhar o assunto do trecho por palavras-chave próximas ao match."""
+    for chave, rotulo in CONTEXTO_PALAVRAS:
+        if chave in trecho_normalizado:
+            return rotulo
+    return None
 
 
 def baixa_edicao(data_str: str) -> bytes:
@@ -69,14 +105,15 @@ def extrai_trecho(pagina_texto_original: str, match_pos: int, janela: int = 120)
 
 
 def busca_termos(paginas_norm: list[str], paginas_original: list[str], termos: list[dict]):
-    """Gera (termo, pagina_numero[1-based], trecho) para cada match encontrado."""
+    """Gera (termo, pagina_numero[1-based], trecho, contexto) para cada match encontrado."""
     for termo in termos:
         regex = constroi_regex(termo["tipo"], termo["valor"])
         for i, texto_norm in enumerate(paginas_norm):
             m = regex.search(texto_norm)
             if m:
                 trecho = extrai_trecho(paginas_original[i], m.start())
-                yield termo, i + 1, trecho
+                contexto = detecta_contexto(normaliza(trecho))
+                yield termo, i + 1, trecho, contexto
 
 
 def carrega_termos_ativos(sb: Client) -> list[dict]:
@@ -89,6 +126,15 @@ def carrega_termos_ativos(sb: Client) -> list[dict]:
         .execute()
     )
     return resp.data or []
+
+
+def ja_processado_hoje(sb: Client, data_edicao: str) -> bool:
+    resp = sb.table("daily_runs").select("data_edicao").eq("data_edicao", data_edicao).limit(1).execute()
+    return bool(resp.data)
+
+
+def marca_processado(sb: Client, data_edicao: str):
+    sb.table("daily_runs").upsert({"data_edicao": data_edicao}).execute()
 
 
 def carrega_admins(sb: Client) -> list[str]:
@@ -121,19 +167,25 @@ def registra_match(sb: Client, termo: dict, data_edicao: str, pagina: int, trech
 
 
 def envia_email(destinatarios: list[str], nome: str, termo_valor: str, pagina: int, trecho: str,
-                 data_edicao: str, pdf_bytes: bytes, remetente: str):
+                 contexto: str | None, data_edicao: str, pdf_bytes: bytes, remetente: str):
     assunto = f"[Diário Oficial de Santos] '{termo_valor}' encontrado na edição de {data_edicao}"
+    linha_contexto = (
+        f"<p><b>Assunto provável:</b> {contexto} <i>(detectado automaticamente, confira no PDF)</i></p>"
+        if contexto
+        else ""
+    )
     corpo = f"""
     <p>Olá, {nome}.</p>
     <p>O termo <b>{termo_valor}</b> foi encontrado na edição do Diário Oficial de Santos de
     <b>{data_edicao}</b>, na página {pagina}.</p>
+    {linha_contexto}
     <p><i>Trecho encontrado:</i><br>&laquo;...{trecho}...&raquo;</p>
     <p>O PDF completo da edição está anexado a este e-mail.</p>
     <hr>
     <p style="font-size:12px;color:#666;">
-    Não quer mais receber estes alertas? Acesse <a href="{SITE_URL}">{SITE_URL}</a>,
-    entre com seu e-mail e clique em "Pausar todos os alertas" (ou exclua o alerta
-    específico em "Meus alertas").
+    Gostaria de continuar recebendo este alerta? Se sim, não precisa fazer nada.
+    Se não quiser mais, acesse <a href="{SITE_URL}">{SITE_URL}</a>, entre com seu e-mail
+    e clique em "Pausar todos os alertas" (ou exclua esse alerta específico em "Meus alertas").
     </p>
     """
     resend.Emails.send(
@@ -170,6 +222,10 @@ def main():
 
     sb = create_client(supabase_url, supabase_key)
 
+    if ja_processado_hoje(sb, data_str):
+        print(f"Edição de {data_str} já foi processada hoje, encerrando sem checar o site.")
+        return
+
     try:
         pdf_bytes = baixa_edicao(data_str)
     except FileNotFoundError as e:
@@ -179,8 +235,10 @@ def main():
     paginas_original = []
     with io.BytesIO(pdf_bytes) as buf, pdfplumber.open(buf) as pdf:
         for page in pdf.pages:
-            paginas_original.append(page.extract_text() or "")
+            paginas_original.append(limpa_texto(page.extract_text() or ""))
     paginas_norm = [normaliza(t) for t in paginas_original]
+
+    marca_processado(sb, data_str)
 
     termos = carrega_termos_ativos(sb)
     if not termos:
@@ -190,7 +248,7 @@ def main():
     admins = carrega_admins(sb)
     total_matches = 0
 
-    for termo, pagina, trecho in busca_termos(paginas_norm, paginas_original, termos):
+    for termo, pagina, trecho, contexto in busca_termos(paginas_norm, paginas_original, termos):
         if ja_notificado(sb, termo["id"], data_str):
             continue  # já notificado numa execução anterior (reprocessamento)
 
@@ -204,6 +262,7 @@ def main():
             termo_valor=termo["valor"],
             pagina=pagina,
             trecho=trecho,
+            contexto=contexto,
             data_edicao=data_str,
             pdf_bytes=pdf_bytes,
             remetente=remetente,
