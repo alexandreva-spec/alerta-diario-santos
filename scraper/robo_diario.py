@@ -127,13 +127,25 @@ def carrega_termos_ativos(sb: Client) -> list[dict]:
     return resp.data or []
 
 
-def ja_processado_hoje(sb: Client, data_edicao: str) -> bool:
-    resp = sb.table("daily_runs").select("data_edicao").eq("data_edicao", data_edicao).limit(1).execute()
-    return bool(resp.data)
+def carrega_cache_dia(sb: Client, data_edicao: str) -> list[str] | None:
+    """Retorna o texto das páginas já extraído hoje (se houver), para não
+    precisar baixar o PDF do site de novo a cada checagem do dia."""
+    resp = (
+        sb.table("daily_runs")
+        .select("paginas_json")
+        .eq("data_edicao", data_edicao)
+        .limit(1)
+        .execute()
+    )
+    if resp.data and resp.data[0].get("paginas_json"):
+        return resp.data[0]["paginas_json"]
+    return None
 
 
-def marca_processado(sb: Client, data_edicao: str):
-    sb.table("daily_runs").upsert({"data_edicao": data_edicao}).execute()
+def salva_cache_dia(sb: Client, data_edicao: str, paginas_original: list[str]):
+    sb.table("daily_runs").upsert(
+        {"data_edicao": data_edicao, "paginas_json": paginas_original}
+    ).execute()
 
 
 def carrega_admins(sb: Client) -> list[str]:
@@ -221,23 +233,26 @@ def main():
 
     sb = create_client(supabase_url, supabase_key)
 
-    if ja_processado_hoje(sb, data_str):
-        print(f"Edição de {data_str} já foi processada hoje, encerrando sem checar o site.")
-        return
+    paginas_original = carrega_cache_dia(sb, data_str)
+    pdf_bytes = None  # só baixamos de fato se precisarmos anexar num e-mail
 
-    try:
-        pdf_bytes = baixa_edicao(data_str)
-    except FileNotFoundError as e:
-        print(str(e))
-        return
+    if paginas_original is not None:
+        print(f"Edição de {data_str} já baixada hoje, reaproveitando o texto (sem bater no site de novo).")
+    else:
+        try:
+            pdf_bytes = baixa_edicao(data_str)
+        except FileNotFoundError as e:
+            print(str(e))
+            return
 
-    paginas_original = []
-    with io.BytesIO(pdf_bytes) as buf, pdfplumber.open(buf) as pdf:
-        for page in pdf.pages:
-            paginas_original.append(limpa_texto(page.extract_text() or ""))
+        paginas_original = []
+        with io.BytesIO(pdf_bytes) as buf, pdfplumber.open(buf) as pdf:
+            for page in pdf.pages:
+                paginas_original.append(limpa_texto(page.extract_text() or ""))
+
+        salva_cache_dia(sb, data_str, paginas_original)
+
     paginas_norm = [normaliza(t) for t in paginas_original]
-
-    marca_processado(sb, data_str)
 
     termos = carrega_termos_ativos(sb)
     if not termos:
@@ -252,6 +267,9 @@ def main():
             continue  # já notificado numa execução anterior (reprocessamento)
 
         registra_match(sb, termo, data_str, pagina, trecho)
+
+        if pdf_bytes is None:
+            pdf_bytes = baixa_edicao(data_str)
 
         dono = termo["users"]
         destinatarios = [dono["email"]] + [a for a in admins if a != dono["email"]]
