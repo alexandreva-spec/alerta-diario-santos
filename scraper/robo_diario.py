@@ -13,7 +13,6 @@ Variáveis de ambiente esperadas (ver ../README.md):
 """
 
 import argparse
-import base64
 import io
 import os
 import re
@@ -197,7 +196,7 @@ def envia_email(destinatarios: list[str], nome: str, termo_valor: str, pagina: i
             "attachments": [
                 {
                     "filename": f"diario_oficial_santos_{data_edicao}.pdf",
-                    "content": list(base64.b64encode(pdf_bytes)),
+                    "content": list(pdf_bytes),
                 }
             ],
         }
